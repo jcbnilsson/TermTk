@@ -33,11 +33,17 @@
 #include <string_view>
 #include <iostream>
 #include <sstream>
+#include <thread>
 
 /* system includes */
 #include <sys/ioctl.h> // for ioctl
 #include <termios.h> // for termios
 #include <unistd.h> // for isatty
+
+namespace _TermTk_Internal {
+    static bool th_key{false};
+    void get_key();
+}
 
 namespace TermTk {
     using Integer = int;
@@ -54,6 +60,8 @@ namespace TermTk {
         Integer x{};
         Integer y{};
     };
+
+    enum class Key { Up, Down, Left, Right, Enter, Backspace, Delete, Tab, Escape, Space, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, Home, End, PageUp, PageDown, Insert, Unknown };
 
     namespace Color::Foreground {
         static constexpr StringView None;
@@ -127,9 +135,17 @@ namespace TermTk {
     void clear_screen();
     void set_cursor(Integer x, Integer y);
     void set_cursor(const CursorPosition& pos);
+    void set_cursor(Bool show);
     void print_one_line(const String& str);
     void fill_entire_background(const String& color);
     void set_raw_mode(Bool enable);
+    void finalize();
+    Key get_key();
+    String get_input();
+    void sleep(Integer ms);
+
+    static Key key{Key::Unknown};
+    static String input;
 }
 
 TermTk::Integer TermTk::closest_color(TermTk::Integer r, TermTk::Integer g, TermTk::Integer b) {
@@ -231,6 +247,10 @@ void TermTk::set_cursor(const CursorPosition& pos) {
     set_cursor(pos.x, pos.y);
 }
 
+void TermTk::set_cursor(TermTk::Bool show) {
+    std::cout << (show ? Cursor::Show : Cursor::Hide);
+}
+
 void TermTk::print_one_line(const TermTk::String& str) {
     auto size = get_size();
 
@@ -263,6 +283,93 @@ void TermTk::set_raw_mode(const TermTk::Bool enable) {
     } else {
         tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
     }
+}
+
+/* Be in a while (running) loop before calling this function */
+TermTk::Key TermTk::get_key() {
+    _TermTk_Internal::get_key();
+    return key;
+}
+
+/* Be in a while (running) loop before calling this function */
+TermTk::String TermTk::get_input() {
+    _TermTk_Internal::get_key();
+    return input;
+}
+
+/* To avoid confusion, call this when you're done drawing */
+void TermTk::finalize() {
+    std::cout << std::flush;
+}
+
+void TermTk::sleep(TermTk::Integer ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+
+void _TermTk_Internal::get_key() {
+    TermTk::set_raw_mode(true);
+    if (th_key) {
+      return;
+    }
+
+std::thread t([]() {
+    th_key = true;
+    while (true) {
+        char c{};
+        std::cin.read(&c, 1);
+
+        if (c == '\033') {
+            std::vector<char> buffer(2);
+            std::cin.read(buffer.data(), 2);
+
+            if (buffer.at(0) == '[') {
+                switch (buffer.at(1)) {
+                    case 'A': TermTk::key = TermTk::Key::Up; break;
+                    case 'B': TermTk::key = TermTk::Key::Down; break;
+                    case 'C': TermTk::key = TermTk::Key::Right; break;
+                    case 'D': TermTk::key = TermTk::Key::Left; break;
+                    case 'H': TermTk::key = TermTk::Key::Home; break;
+                    case 'F': TermTk::key = TermTk::Key::End; break;
+                    case '5': std::cin.read(&c, 1); TermTk::key = c == '~' ? TermTk::Key::PageUp : TermTk::Key::Unknown; break;
+                    case '6': std::cin.read(&c, 1); TermTk::key = c == '~' ? TermTk::Key::PageDown : TermTk::Key::Unknown; break;
+                    case '2': std::cin.read(&c, 1); TermTk::key = c == '~' ? TermTk::Key::Insert : TermTk::Key::Unknown; break;
+                    case '3': std::cin.read(&c, 1); TermTk::key = c == '~' ? TermTk::Key::Delete : TermTk::Key::Unknown; break;
+                    default: TermTk::key = TermTk::Key::Unknown; break;
+                }
+            } else if (buffer.at(0) == 'O') {
+                switch (buffer.at(1)) {
+                    case 'P': TermTk::key = TermTk::Key::F1; break;
+                    case 'Q': TermTk::key = TermTk::Key::F2; break;
+                    case 'R': TermTk::key = TermTk::Key::F3; break;
+                    case 'S': TermTk::key = TermTk::Key::F4; break;
+                    case 'A': TermTk::key = TermTk::Key::F5; break;
+                    case 'B': TermTk::key = TermTk::Key::F6; break;
+                    case 'C': TermTk::key = TermTk::Key::F7; break;
+                    case 'D': TermTk::key = TermTk::Key::F8; break;
+                    case 'E': TermTk::key = TermTk::Key::F9; break;
+                    case 'F': TermTk::key = TermTk::Key::F10; break;
+                    case 'G': TermTk::key = TermTk::Key::F11; break;
+                    case 'H': TermTk::key = TermTk::Key::F12; break;
+                    default: TermTk::key = TermTk::Key::Unknown; break;
+                }
+            } else {
+                TermTk::key = TermTk::Key::Unknown;
+            }
+        } else if (c == 127 || c == '\b') {
+            TermTk::key = TermTk::Key::Backspace;
+        } else if (c == '\n') {
+            TermTk::key = TermTk::Key::Enter;
+            TermTk::input.clear();
+        } else if (c == 27) {
+            TermTk::key = TermTk::Key::Escape;
+        } else {
+            TermTk::input += c;
+            TermTk::key = TermTk::Key::Unknown;
+        }
+    }
+});
+
+    t.detach();
 }
 
 #if TT_UNRELEASED
